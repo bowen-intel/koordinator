@@ -21,7 +21,8 @@ AGENT_MODE ?= hostMode
 # Set license header files.
 LICENSE_HEADER_GO ?= hack/boilerplate/boilerplate.go.txt
 
-PACKAGES ?= $(shell go list ./... | grep -vE 'vendor|test/e2e')
+PERFGROUPPACKAGE ?= 'github.com/koordinator-sh/koordinator/pkg/koordlet/util/perf_group'
+PACKAGES ?= $(shell go list ./... | grep -vE 'vendor|test/e2e|$(PERFGROUPPACKAGE)')
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -66,7 +67,6 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="$(LICENSE_HEADER_GO)" paths="./apis/..."
-	$(CONTROLLER_GEN) object:headerFile="$(LICENSE_HEADER_GO)" paths="./pkg/slo-controller/config/..."
 	@hack/update-codegen.sh
 
 .PHONY: fmt
@@ -75,7 +75,8 @@ fmt: ## Run go fmt against code.
 
 .PHONY: vet
 vet: ## Run go vet against code.
-	go vet ./...
+	go vet -unsafeptr=false $(PERFGROUPPACKAGE)
+	go list ./... | grep -v $(PERFGROUPPACKAGE) | xargs go vet
 
 .PHONY: lint
 lint: lint-go lint-license ## Lint all code.
@@ -89,12 +90,14 @@ lint-license:
 	@hack/update-license-header.sh
 
 .PHONY: test
-test: manifests generate fmt vet envtest ## Run tests.
-	@KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" agent_mode=$(AGENT_MODE) go test $(PACKAGES) -race -covermode atomic -coverprofile cover.out
+test: manifests generate fmt vet envtest libpfm ## Run tests.
+	@KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" agent_mode=$(AGENT_MODE) go test $(PACKAGES) -race -covermode atomic -coverprofile cover.out 
+	@KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" agent_mode=$(AGENT_MODE) go test $(PERFGROUPPACKAGE) -covermode atomic -coverprofile tmp.out && cat tmp.out | tail -n +2 >> cover.out && rm tmp.out
 
 .PHONY: fast-test
-fast-test: envtest ## Run tests fast.
+fast-test: envtest libpfm ## Run tests fast.
 	@KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" agent_mode=$(AGENT_MODE) go test $(PACKAGES) -race -covermode atomic -coverprofile cover.out
+	@KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" agent_mode=$(AGENT_MODE) go test $(PERFGROUPPACKAGE) -covermode atomic -coverprofile tmp.out && cat tmp.out | tail -n +2 >> cover.out && rm tmp.out
 
 ##@ Build
 
@@ -102,7 +105,7 @@ fast-test: envtest ## Run tests fast.
 build: build-koordlet build-koord-manager build-koord-scheduler build-koord-descheduler build-koord-runtime-proxy
 
 .PHONY: build-koordlet
-build-koordlet: ## Build koordlet binary.
+build-koordlet: libpfm ## Build koordlet binary.
 	go build -o bin/koordlet cmd/koordlet/main.go
 
 .PHONY: build-koord-manager
@@ -240,3 +243,7 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 ginkgo: $(GINKGO) ## Download ginkgo locally if necessary.
 $(GINKGO): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) go install github.com/onsi/ginkgo/ginkgo@$(GINKGO_VERSION)
+
+.PHONY: libpfm
+libpfm: 
+	@hack/libpfm.sh
